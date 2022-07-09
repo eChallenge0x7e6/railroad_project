@@ -1,2 +1,33 @@
-# railroad_project
-It's a source for a eChallenge's original Model Railroad. It's coding with Arduino.
+# Railroad Project
+## 概要
+このリポジトリはeChallengeサークル（以下サークルと略す）が自作した鉄道模型に使用するソースを開発するためのものです。
+制御基板にはAtmega328Pが搭載され、開発環境にはArduinoを使用します。
+## ピン配置
+1. RST
+2. (未使用)
+3. (未使用)
+4. (未使用)
+5. (未使用)
+6. (未使用)
+7. Vcc
+8. GND
+9. crystal(16MHz)
+10. crystal(16MHz)
+11. (未使用)
+12. (未使用)
+13. (未使用)
+14. D8(リレーコイルSW)
+15. (未使用)
+16. (未使用)
+17. D11(MOSI 書き込み用)
+18. D12(MISO 書き込み用)
+19. D13(SCK 書き込み用)
+20. AVCC
+21. AREF
+22. GND
+23. (未使用)
+24. (未使用)
+25. A2(CdSセンサ)
+26. A3(CdSセンサ)
+27. SDA(I2C)
+28. SCL(I2C)
