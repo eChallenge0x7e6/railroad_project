@@ -24,6 +24,10 @@
 #define TMR_PERIOD    (3000)//コマンドの停車ディレイタイム
 
 //グローバル変数の宣言
+enum mode_t{                //モード一覧
+  NORMAL = 0,
+  DEBUG,
+}mode;
 union{  //I2C送信用データ変数
   uint8_t data;
   struct{
@@ -31,6 +35,13 @@ union{  //I2C送信用データ変数
     uint8_t on_rail : 3;
     uint8_t output : 1;
   }sts;
+  struct{
+    uint8_t reserved : 2;
+    uint8_t detect_a : 1;
+    uint8_t detect_b : 1;
+    uint8_t on_rail : 3;
+    uint8_t output : 1;
+  }dbg;
 }tx;
 union{  //I2C受信用データ変数
   uint8_t data;
@@ -142,8 +153,18 @@ uint8_t senser_process(void){
     }//else Nothing to do
   }//else Nothing to do
 
+  if(mode==DEBUG){
+    tx.dbg.detect_a = detect_a;
+    tx.dbg.detect_b = detect_b;
+  }//else Nothing to do
+
   return abs(on_rail_num);
 }
+
+/**
+ * リセット関数：プログラムを最初から始める。
+ */
+void (*reset_func) (void) = 0;  //アドレスを0にしてプログラムを最初から始める。
 
 /**
  * 初期化関数
@@ -159,6 +180,7 @@ void setup() {
   Wire.onReceive(ReceiveEvent); //I2C受信関数設定
 
   //各変数の初期化
+  mode = NORMAL;
   tx.data = 0;
   rx.data = 0;
 }
@@ -215,6 +237,11 @@ void ReceiveEvent(int num){
       break;
     case 0x7://Clear code
       cmd_flg = false;
+      break;
+    case 0xd:
+      mode = DEBUG;
+    case 0xf:
+      reset_func();
       break;
     default:
       break;

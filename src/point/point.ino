@@ -96,6 +96,11 @@ void senser_process(void){
 }
 
 /**
+ * リセット関数：プログラムを最初から始める。
+ */
+void (*reset_func) (void) = 0;  //アドレスを0にしてプログラムを最初から始める。
+
+/**
  * 初期化関数
  * 起動後、最初に一度だけ処理される。
  */
@@ -163,6 +168,9 @@ void ReceiveEvent(int num){
       break;
     case 0x2://Switch when detected
       cmd_step = 1;
+      break;
+    case 0xf:
+      reset_func();
       break;
     default:
       break;
