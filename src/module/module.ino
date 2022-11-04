@@ -2,7 +2,7 @@
 #include <Wire.h>       //I2Cライブラリ
 #include <MsTimer2.h>   //タイマーライブラリ
 
-#define DEBUG (1)
+//#define DEBUG (1)
 
 //マクロの定義
 #ifdef DEBUG
@@ -18,8 +18,8 @@
 #define OFF     (LOW)       //リレー用トランジスタのネガティブ極性
 #define SENS_A  (A3)        //センサA入力ピン番号
 #define SENS_B  (A2)        //センサB入力ピン番号
-#define ACT_THR (100)       //センサの閾値（アクティブ）
-#define NEG_THR (500)       //センサの閾値（ネガティブ）
+#define ACT_THR (300)       //センサの閾値（アクティブ）
+#define NEG_THR (800)       //センサの閾値（ネガティブ）
 #define SENS_PERIOD   (10)  //列車検出の閾時間(msec)
 #define TMR_PERIOD    (3000)//停車指令の遅延時間
 
@@ -109,6 +109,20 @@ void cmd_process(int on_rail){
           cmd_flg = false;
         }//else Nothing to do
         break;
+      case 0x8:
+        if(on_rail>reg_num){                //進入時
+          MsTimer2::set(TMR_PERIOD, rail_off);
+          MsTimer2::start();
+          cmd_flg = false;
+        }//else Nothing to do
+        break;
+      case 0x9:
+        if(on_rail<reg_num){                //通過時
+          MsTimer2::set(TMR_PERIOD, rail_off);
+          MsTimer2::start();
+          cmd_flg = false;
+        }//else Nothing to do
+        break;
       default:                              //エラー
         break;
     }
@@ -154,8 +168,8 @@ uint8_t senser_process(void){
   }//else Nothing to do
 
   if(mode==DEBUG_1){
-    tx.dbg.detect_a = detect_a;
-    tx.dbg.detect_b = detect_b;
+    tx.dbg.detect_a |= detect_a;
+    tx.dbg.detect_b |= detect_b;
   }//else Nothing to do
 
   return tx.sts.on_rail = abs(on_rail_num);
@@ -164,20 +178,21 @@ uint8_t senser_process(void){
 /**
  * リセット関数：プログラムを最初から始める。
  */
-void (*reset_func) (void) = 0;  //アドレスを0にしてプログラムを最初から始める。
+void (*resetFunc)(void) = 0;  //アドレスを0にしてプログラムを最初から始める。
 
 /**
  * 初期化関数
  * 起動後、最初に一度だけ処理される。
  */
 void setup() {
-  pinMode(RELAY, OUTPUT);       //リレー出力ピン設定
-
   Serial.begin(9600);           //デバッグ用シリアル出力設定
 
+  //初期設定
   Wire.begin(ADDRESS);          //I2C設定
   Wire.onRequest(RequestEvent); //I2Cリクエスト関数設定
   Wire.onReceive(ReceiveEvent); //I2C受信関数設定
+  
+  pinMode(RELAY, OUTPUT);       //リレー出力ピン設定
 
   //各変数の初期化
   mode = NORMAL;
@@ -205,8 +220,9 @@ void loop() {
  * リクエストに応え、区間状態を送信する。
  */
 void RequestEvent(){
-  Wire.write(tx.data);//データ送信
-  Debug("\"要求を確認しました。 : 0x%02xn\", tx.data");
+  Wire.write(tx.data);        //データ送信
+  Debug("状態を送信しました。");Debug(tx.data);Debug("\n");
+  tx.data = 0x00;             //データクリア
 }
 
 /**
@@ -224,25 +240,34 @@ void ReceiveEvent(int num){
     case 0x0:             //待機
       break;
     case 0x1:             //発車
+      cmd_flg = false;
       rail_on();
       break;
     case 0x2:             //停止
+      cmd_flg = false;
       rail_off();
       break;
     case 0x3:             //列車進入時、停止
-    case 0x4:             //列車進入時、遅延付き停止
+    case 0x4:             //列車進入時、一時停止
     case 0x5:             //列車通過時、停止
-    case 0x6:             //列車通過時、遅延付き停止
+    case 0x6:             //列車通過時、一時停止
+    case 0x8:             //列車進入時、遅延停止
+    case 0x9:             //列車通過時、遅延停止
       cmd_flg = true;
+      rail_on();
       break;
     case 0x7:             //指令解除
       cmd_flg = false;
       mode = NORMAL;
+      Debug("指令が解除されました。\n");
       break;
     case 0xd:             //デバッグモード
+      cmd_flg = false;
+      Debug("デバッグモード\n");
       mode = DEBUG_1;
     case 0xf:             //リセット
-      reset_func();
+      Debug("リセットされます。\n");
+      resetFunc();
       break;
     default:
       break;

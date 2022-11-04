@@ -8,6 +8,7 @@
 #else
   #define Debug(s) 
 #endif
+#define CONTROL_MODE  (1)   // 0:列車2台, 1:追越し機能
 #define M_NUM   (4)         //モジュール総数
 #define P_NUM   (1)         //ポインタ総数
 #define CW      (1)         //時計回り
@@ -23,7 +24,8 @@ enum mode_t{                //メイン用モード一覧
 union rx_t{                 //I2C受信用データ型
   uint8_t data = 0x00;
   struct{
-    uint8_t reserved : 4;   //未使用
+    uint8_t reserved : 3;   //未使用
+    uint8_t passed : 1;     //追越しフラグ
     uint8_t on_rail : 3;    // Number of train
     uint8_t output : 1;     // 0:Stop, 1:Go
   }sts;
@@ -48,10 +50,12 @@ enum rail_command_t{        //モジュール用コマンド一覧
   RC1,      //発車
   RC2,      //停車
   RC3,      //列車進入後、停車
-  RC4,      //列車進入後、規定時間停車
+  RC4,      //列車進入後、一時停止
   RC5,      //列車通過後、停車
-  RC6,      //列車通過後、規定時間停車
+  RC6,      //列車通過後、一時停止
   RC7,      //指令解除
+  RC8,      //列車進入後、遅延停止
+  RC9,      //列車通過後、遅延停止
   RCd,      //デバッグモード切替
   RCf,      //リセット
 };
@@ -75,6 +79,7 @@ struct point_info_t{        //ポイント情報構造体
   int addr = 0x60;          //I2Cアドレス
   union rx_t rx;            //受信データ
   union tx_t tx;            //送信データ
+  bool passed = false;      //追越し済みフラグ
   bool work = false;        //動作状態　true:追越線, false:主線
 };
 
@@ -111,7 +116,74 @@ void error(error_type err){
       break;
     case UNEXPECTED_ERR:
       break;
+    case NO_ERR:
+    default:
+      break;
   }
+}
+
+/**
+ * 路線状況から危険状態を確認、指令を発令する。
+ * @return true:発令, false:安全
+ */
+bool analyze(void){
+  bool ret = false;         //発令フラグ
+
+  if(dir!=post_dir){        //進行方向が切替わった場合
+    ret = true;
+    for(int i=0; i<M_NUM; i++) rail_info[i].tx.data = 0x00; //以前の送信データをクリア
+  }//else Nothing to do
+
+  for(int i=0; i<M_NUM; i++){
+    int fm = i+dir;         //前方区間番号
+    int bm = i-1*dir;       //後方区間番号
+    if(fm>=M_NUM)       fm = 0;
+    else if(fm<0)       fm = M_NUM-1;
+    //else Nothing to do
+    if(bm>=M_NUM)       bm = 0;
+    else if(bm<0)       bm = M_NUM-1;
+    //else Nothing to do
+
+    #if CONTROL_MODE==0 /*列車2台用制御コード*/
+      if(rail_info[i].rx.sts.on_rail>=1){  //列車間距離接近
+        //Debug("危険状態を検出しました。");
+        rail_info[bm].tx.cmd.code = RC2;
+        //Debug("後方区間");Debug(bm);Debug("に停止指令を発令しました。\n");
+        ret = true;
+      } else if(rail_info[i].rx.sts.on_rail==0){ //安全確認
+        //Debug("危険状態を回避しました。");
+        rail_info[bm].tx.cmd.code = RC1;
+        //Debug("後方区間");Debug(bm);Debug("に発車指令を発令しました。\n");
+        ret = true;
+      }//else Nothing to do
+    
+    #elif CONTROL_MODE==1 /*追越し用制御コード*/
+      if(rail_info[i].rx.sts.on_rail>1){                                                  //列車間距離接近
+        if(rail_info[i].critical==0){
+          rail_info[i].critical = 1;                                                      //危険状態フラグ
+          rail_info[i].tx.cmd.code = RC6;                                                 //通過後一時停止
+          Debug("|危険検出|");Debug("区間");Debug(i);Debug("に一時停止指令を発令しました。\n");
+          if(rail_info[fm].rx.sts.on_rail==0){
+            if(rail_info[fm].point_exist && point_info[rail_info[fm].point_num].work==0){ //前方副線に空きあり
+              switch_point(rail_info[fm].point_num, PXC2);                                //列車検出後、ポイント切替
+              Debug("ポイント");Debug(fm);Debug("で追越しを行います。\n");
+            }//else Nothing to do
+          }//else Nothing to do
+          ret = true;
+        }//else Nothing to do
+      } else {          
+        rail_info[i].critical = 0;                                                                  //危険なし
+        if(rail_info[i].point_exist && point_info[rail_info[i].point_num].work){                    //ポイント動作中
+          if(point_info[rail_info[i].point_num].passed){                                            //追越し確認後
+            switch_point(rail_info[i].point_num, PXC1);                                             //ポイント切替
+            Debug("追越しが完了しました。\n");
+          }//else Nothing to do
+        }//else Nothing to do
+        ret = true;
+      }
+    #endif
+  }
+  return ret;
 }
 
 /**
@@ -148,107 +220,37 @@ void check(void){
 
 /**
  * 指定のポイントの状態を受信する。
+ */
+void check_point(void){
+  for(int i=0; i<P_NUM; i++){
+    Wire.requestFrom(point_info[i].addr, 1);            //ポイントの状態受信
+    while(Wire.available()){
+      point_info[i].rx.data = Wire.read();
+    }
+    point_info[i].passed = point_info[i].rx.sts.passed; //追越しフラグ
+    point_info[i].work = point_info[i].rx.sts.output;   //ポイント切替状態の取得
+  }
+}
+
+/**
+ * 指定アドレスに進行方向を加えて指令を送信する。
+ */
+void send(char addr, char code){
+  tx_t tmp;
+  tmp.cmd.code = code;
+  if(dir==CW) tmp.cmd.directry = 0;                        //進行方向追加
+  else        tmp.cmd.directry = 1;
+  i2c_tx(addr, tmp.data);                                  //指令送信
+}
+
+/**
+ * ポイント切替関数
  * @param num : ポイント番号
  */
-void check_point(int num){
-  Wire.requestFrom(point_info[num].addr, 1);            //ポイントの状態受信
-  while(Wire.available()){
-    point_info[num].rx.data = Wire.read();
-  }
-  point_info[num].work = point_info[num].rx.sts.output; //ポイント切替状態の取得
-}
-
-/**
- * 路線状況から危険状態を確認、指令を発令する。
- * @return true:発令, false:安全
- */
-bool analyze(void){
-  bool ret = false;         //発令フラグ
-
-  if(dir!=post_dir){        //進行方向が切替わった場合
-    ret = true;
-    for(int i=0; i<M_NUM; i++) rail_info[i].tx.data = 0x00; //以前の送信データをクリア
-  }//else Nothing to do
-
-  for(int i=0; i<M_NUM; i++){
-    int fm = i+dir;         //前方区間番号
-    int bm = i-1*dir;       //後方区間番号
-    if(fm>=M_NUM){
-      fm = 0;
-    } else if(bm>=M_NUM){
-      bm = 0;
-    }//else Nothing to do
-    if(fm<0){
-      fm = M_NUM-1;
-    }else if(bm<0){
-      bm = M_NUM-1;
-    }//else Nothing to do
-    /*列車二台用制御コード*/
-    if(rail_info[i].rx.sts.on_rail>=1){  //列車間距離接近
-      //Debug("危険状態を検出しました。");
-      //rail_info[i].critical = 1;        //危険状態指定
-      rail_info[bm].tx.cmd.code = RC2;
-      //Debug("後方区間");Debug(bm);Debug("に停止指令を発令しました。\n");
-      ret = true;
-    }else if(rail_info[i].rx.sts.on_rail==0){ //安全確認
-      //Debug("危険状態を回避しました。");
-      //rail_info[i].critical = 0;        //危険状態クリア
-      rail_info[bm].tx.cmd.code = RC1;
-      //Debug("後方区間");Debug(bm);Debug("に発車指令を発令しました。\n");
-      ret = true;
-    /*列車三台制御用コード
-    if(rail_info[i].critical==0 && rail_info[i].rx.sts.on_rail>1){  //列車間距離接近
-      rail_info[i].critical = 1;        //危険状態指定
-      Debug("危険状態を検出しました。");
-      rail_info[i].tx.cmd.code = RC6;   //車間距離を空ける
-      if(rail_info[fm].point_exist){      //前方に追い越しレーンあり
-        int num = rail_info[fm].point_num;
-        rail_info[fm].critical = 1;
-        point_info[num].work = true;      //ポイント動作フラグ
-        point_info[num].tx.cmd.code = PC1;//ポイント切替指示
-        Debug("ポイント);Debug(num);Debug("にて追越し指令を発令しました。\n");
-      }//else Nothing to do
-      if(rail_info[bm].rx.sts.on_rail>0){ //後方列車あり
-        rail_info[bm].tx.cmd.code = RC2;
-        Debug("後方車に停止指令を発令しました。\n");
-      } else {                            //後方列車なし
-        rail_info[bm].tx.cmd.code = RC4;
-        Debug("後方車に停止3s指令を発令しました。\n");
-      }
-      ret = true;
-    } else if(rail_info[i].critical==1 && rail_info[i].rx.sts.on_rail<=1){  //列車は接近していないが、安全確認されていない。
-      if(rail_info[i].point_exist){       //追越しレーンがある場合
-        int num = rail_info[i].point_num;
-        check_point(num);                 //ポインタの状態受信
-        if(!point_info[num].work){        //主線復帰
-          rail_info[i].critical = 0;      //安全確認
-          Debug("危険状態は回避しました。\n");
-        }//else Nothing to do
-      } else {                            //追越しレーンがない場合
-        rail_info[i].critical = 0;        //安全確認
-        Debug("危険状態は回避しました。\n");
-      }
-    */
-    }//else Nothing to do
-  }
-  return ret;
-}
-
-/**
- * 危険状態の区間に指令を送信する。
- */
-void send(void){
-  for(int i=0; i<M_NUM; i++){
-    if(rail_info[i].critical==1){
-      if(dir==CW) rail_info[i].tx.cmd.directry = 0;             //進行方向追加
-      else        rail_info[i].tx.cmd.directry = 1;
-      i2c_tx(rail_info[i].addr, rail_info[i].tx.data);          //指令送信
-      if(rail_info[i].point_exist){
-        int num = rail_info[i].point_num;
-        i2c_tx(point_info[num].addr, point_info[num].tx.data);  //指令送信
-      }//else Nothing to do
-    }//else Nothing to do
-  }
+void switch_point(int num, char code){
+  point_info[num].tx.cmd.code = code;
+  i2c_tx(point_info[num].addr, point_info[num].tx.data);
+  Debug("ポイント");Debug(num);Debug("を切替えます。\n");
 }
 
 /**
@@ -256,10 +258,22 @@ void send(void){
  */
 void send_all(void){
   for(int i=0; i<M_NUM; i++){
-    if(dir==CW) rail_info[i].tx.cmd.directry = 0;     //進行方向追加
+    if(dir==CW) rail_info[i].tx.cmd.directry = 0;           //進行方向追加
     else        rail_info[i].tx.cmd.directry = 1;
-    i2c_tx(rail_info[i].addr, rail_info[i].tx.data);  //指令送信
+    i2c_tx(rail_info[i].addr, rail_info[i].tx.data);        //指令送信
   }
+  for(int i=0; i<P_NUM; i++)  i2c_tx(point_info[i].addr, point_info[i].tx.data);  //指令送信
+}
+
+/**
+ * 全区間に指令を指定して送信する。
+ */
+void send_all_cmd(rail_command_t code, ...){
+  va_list ap;
+  va_start(ap, code);
+  for(int i=0; i<M_NUM; i++) rail_info[i].tx.cmd.code = va_arg(ap, rail_command_t);
+  send_all();
+  va_end(ap);
 }
 
 /**
@@ -270,10 +284,36 @@ bool init_t(void){
   check();//線路内の列車の有無を確認
   
   //残列車の誘導
+  return true;
+}
 
-  for(int i=0; i<M_NUM; i++){
-    rail_info[i].tx.cmd.code = RC1; //発車指令
-  }
+/**
+ * 初期化関数：各区間のモジュールをリセット、線路内の列車を整理する。
+ * 動作中は時計回りの一定速度での走行とする。
+ * @param term : 区間通過最長時間（ミリ秒）
+ */
+bool init(int term){  
+  send_all_cmd(RC1, RC1, RC1, RC1);   //全区間発車指令
+  //間隔を空ける。
+  send_all_cmd(RC5, RC5, RC5, RC5);   //通過後停止
+  delay(term);
+  //区間0,2を空にする。
+  send_all_cmd(RC1, RC8, RC1, RC8);   //区間0,2を排車
+  delay(term);
+  send_all_cmd(RCf, RC2, RCf, RC2);   //区間0,2をリセット
+  delay(10);
+  //区間1を空にする。
+  send_all_cmd(RC8, RC1, RC8, RC1);   //区間1,3を排車
+  delay(term);
+  send_all_cmd(RC2, RCf, RC2, RC2);   //区間1をリセット
+  delay(10);
+  //区間3を空にする
+  switch_point(0, PXC1);              //ポイント切替
+  send_all_cmd(RC2, RC2, RC2, RC5);   //区間3ポイント内を排車
+  delay(term);
+  send_all_cmd(RC2, RC2, RC2, RCf);   //区間3をリセット
+  switch_point(0, PXC1);              //ポイント切替
+  Debug("初期化終了\n");
   return true;
 }
 
@@ -290,8 +330,9 @@ bool test_sensor(int module, int sensor){
     for(int i=0; i<M_NUM; i++){
       Wire.requestFrom(rail_info[i].addr, 1);                       //区間状態を受信
       while (Wire.available()) rail_info[i].rx.data = Wire.read();  //データ読み取り
-      Debug("|out");Debug(i);Debug(":");Debug(rail_info[i].rx.dbg.output);Debug(",A:");Debug(rail_info[i].rx.dbg.sens_a);Debug(",B:");Debug(rail_info[i].rx.dbg.sens_b);Debug("\n");
+      Debug("|out");Debug(i);Debug(":");Debug(rail_info[i].rx.dbg.output);Debug(",A:");Debug(rail_info[i].rx.dbg.sens_a);Debug(",B:");Debug(rail_info[i].rx.dbg.sens_b);
     }
+    Debug("\n");
     if(sensor==0 && rail_info[module].rx.dbg.sens_a==1){               //センサBで列車が検出された。
       Debug("区間");Debug(module);Debug("のセンサAを確認しました。\n");
       res = true;
@@ -352,7 +393,7 @@ void i2c_tx(uint8_t addr, uint8_t data){
 /**
  * リセット関数：プログラムを最初から始める。
  */
-void (*reset_func) (void) = 0;  //アドレスを0にしてプログラムを最初から始める。
+void (*resetFunc)(void) = 0;  //アドレスを0にしてプログラムを最初から始める。
 
 /**
  * Serialに受信データがある時、loop()の最後に呼び出される。
@@ -375,6 +416,7 @@ void serialEvent(){
           Debug("デバッグモード#1を開始します。\n");
           mode = DEBUG_1;
           for(int k=0; k<M_NUM; k++) rail_info[k].tx.cmd.code = RCd;  //デバッグモード指令
+          for(int k=0; k<P_NUM; k++) point_info[k].tx.cmd.code = RCd; //デバッグモード指令
           send_all();
           delay(100);
           debug_mod_1();
@@ -384,7 +426,7 @@ void serialEvent(){
           i2c_tx(point_info[0].addr, point_info[0].tx.data);
           Debug("ポイント切替\n");
           delay(100);
-          Wire.requestFrom(point_info[0].addr, 1);                       //区間状態を受信
+          Wire.requestFrom(point_info[0].addr, 1);  //区間状態を受信
           delay(100);
           while (Wire.available()) Debug(Wire.read());
           Debug("\n");
@@ -393,10 +435,9 @@ void serialEvent(){
           mode = NORMAL;
           break;
         case 'R':         //リセット
-          for(int k=0; k<M_NUM ; k++) rail_info[k].tx.cmd.code = RCf; //リセット指令
-          send_all();
-          delay(100);
-          reset_func();
+          send_all_cmd(RCf, RCf, RCf, RCf);         //全区間リセット
+          Debug("リセットします。\n");
+          resetFunc();
           break;
         default:
           //無効なコマンドエラー
@@ -429,7 +470,7 @@ void setup() {
   while(!init_t()) error(TRAFFIC_ERR);
 
   //運行開始
-  send_all();
+  send_all_cmd(RC1, RC1, RC1, RC1);
 }
 
 /**
@@ -439,6 +480,9 @@ void loop() {
   //int deb = millis();
   //Debug("loop period:");Debug(deb);Debug("\n");
   check();                //路線状態の確認
+  #if CONTROL_MODE>0
+    check_point();
+  #endif
   if(analyze()){          //状況判別と指令
     send_all();         //全区間へ送信
   }//else Nothing to do

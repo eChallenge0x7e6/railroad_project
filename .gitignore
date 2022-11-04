@@ -1,3 +1,6 @@
+#tools configrations
+*.vscode
+
 # Prerequisites
 *.d
 

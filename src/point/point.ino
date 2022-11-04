@@ -1,7 +1,7 @@
 //ライブラリの宣言
 #include <Wire.h>       //I2Cライブラリ
 
-#define DEBUG (1)
+//#define DEBUG (1)
 
 //マクロの定義
 #ifdef DEBUG
@@ -15,8 +15,8 @@
 #define OFF     (LOW)       //リレー用トランジスタのネガティブ極性
 #define SENS_A  (A3)        //センサA入力ピン番号
 #define SENS_B  (A2)        //センサB入力ピン番号
-#define ACT_THR (100)       //センサの閾値（アクティブ）
-#define NEG_THR (500)       //センサの閾値（ネガティブ）
+#define ACT_THR (300)       //センサの閾値（アクティブ）
+#define NEG_THR (800)       //センサの閾値（ネガティブ）
 #define SENS_PERIOD   (10)  //列車検出の閾時間(msec)
 
 //グローバル変数の宣言
@@ -27,7 +27,9 @@ enum mode_t{                //モード一覧
 union{                      //I2C送信用データ変数
   uint8_t data;
   struct{
-    uint8_t reserved : 7;
+    uint8_t reserved : 3;
+    uint8_t passed : 1;
+    uint8_t reserved_0 : 3;
     uint8_t work : 1;       //ポイント動作状態 0:主線, 1:副線
   }sts;
   struct{
@@ -49,7 +51,7 @@ union{                      //I2C受信用データ変数
 
 bool detect_a = false;      //列車検出フラグA
 bool detect_b = false;      //列車検出フラグB
-int cmd_step = 0;           //コマンド処理の進捗カウンタ
+bool cmd_flg = false;       //コマンド処理の進捗カウンタ
 
 /**
  * ポイント切替関数
@@ -60,19 +62,17 @@ void point_switch(void){
   digitalWrite(RELAY, switch_on);           //出力
   if(switch_on==OFF)  tx.sts.work = 0;
   else                tx.sts.work = 1;
-  Debug("ポイントを切替えました。");
+  tx.sts.passed = 0;
+  Debug("ポイントを切替えました。\n");
 }
 
 /**
  * メインCPUからの指令処理関数
  */
 void cmd_process(void){
-  if(detect_a && detect_b && cmd_step==2){  //副線通過確認
-    cmd_step=0;                             //指令処理終了
-  } else if(detect_a && cmd_step==1){       //主線列車検出
-    point_switch();                         //ポイント切替
-    cmd_step++;                             //指令処理シーケンスを進める
-  }//else Nothing to do
+  if(detect_a)  point_switch();             //ポイント切替
+  else if(detect_b) tx.sts.passed = 1;
+  //else Nothing to do
 }
 
 /**
@@ -106,7 +106,7 @@ void senser_process(void){
 /**
  * リセット関数：プログラムを最初から始める。
  */
-void (*reset_func) (void) = 0;              //アドレスを0にしてプログラムを最初から始める。
+void (*resetFunc)(void) = 0;              //アドレスを0にしてプログラムを最初から始める。
 
 /**
  * 初期化関数
@@ -132,7 +132,7 @@ void setup() {
  */
 void loop() {
   senser_process();                         //区間状態の更新
-  if(cmd_step!=0){
+  if(cmd_flg){
     cmd_process();                          //指令処理
   }//else Nothing to do
 }
@@ -164,19 +164,21 @@ void ReceiveEvent(int num){
       break;
     case 0x1:                               //切替
       point_switch();
+      cmd_flg = false;
       break;
-    case 0x2:                               //センサA検出時、切替
-      cmd_step = 1;
+    case 0x2:                               //センサ検出時、切替
+      cmd_flg = true;
       break;
     case 0x7:                               //指令解除
-      cmd_step = 0;
+      cmd_flg = false;
       mode = NORMAL;
       break;
     case 0xd:                               //デバッグモード
+      cmd_flg = false;
       mode = DEBUG_1;
       break;
     case 0xf:                               //リセット
-      reset_func();
+      resetFunc();
       break;
     default:
       break;
