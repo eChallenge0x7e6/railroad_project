@@ -282,8 +282,8 @@ void setup() {
     ACT_THR = eeprom.prm.act<<2;
     NEG_THR = eeprom.prm.neg<<2;
     SENS_PERIOD = eeprom.prm.sens;
-    MASK_PERIOD = eeprom.prm.mask;
-    TMR_PERIOD  = eeprom.prm.det;
+    MASK_PERIOD = eeprom.prm.mask<<2;
+    TMR_PERIOD  = eeprom.prm.det<<8;
     WDT_PERIOD  = eeprom.prm.wdt<<8;
     Debug("EEPROMからパラメータを読み取ります。");
   }//else Nothing to do
@@ -398,8 +398,8 @@ void ReceiveEvent(int num){
       ACT_THR = data[0]<<2;
       NEG_THR = data[1]<<2;
       SENS_PERIOD = data[2];
-      MASK_PERIOD = data[3];
-      TMR_PERIOD  = data[4];
+      MASK_PERIOD = data[3]<<2;
+      TMR_PERIOD  = data[4]<<8;
       WDT_PERIOD  = data[5]<<8;
       Debug("パラメータが設定されました。\n");
       break;
