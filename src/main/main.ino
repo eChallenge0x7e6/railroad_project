@@ -20,6 +20,7 @@
 enum mode_t{                //メイン用モード一覧
   NORMAL = 0,
   OVERTAKE,
+  OVERTAKE_1,
   DEBUG_1,
 };
 union rx_t{                 //I2C受信用データ型
@@ -149,64 +150,163 @@ bool analyze(void){
       for(int i=0; i<M_NUM; i++) rail_info[i].tx.data = 0x00; //以前の送信データをクリア
     }//else Nothing to do
   */
-  for(int i=0; i<M_NUM; i++){
-    int fm = i+dir;         //前方区間番号
-    int bm = i-1*dir;       //後方区間番号
-    if(fm>=M_NUM)       fm = 0;
-    else if(fm<0)       fm = M_NUM-1;
-    //else Nothing to do
-    if(bm>=M_NUM)       bm = 0;
-    else if(bm<0)       bm = M_NUM-1;
-    //else Nothing to do
+  if(dir==CW){
+    for(int i=0; i<M_NUM; i++){
+      int fm = i+1;   //前方区間番号
+      int bm = i-1;   //後方区間番号
+      if(fm>=M_NUM)       fm = 0;
+      else if(fm<0)       fm = M_NUM-1;
+      //else Nothing to do
+      if(bm>=M_NUM)       bm = 0;
+      else if(bm<0)       bm = M_NUM-1;
 
-    if(mode==NORMAL){                     /*列車2台用制御コード*/
-      if(rail_info[i].rx.sts.on_rail>=1){ //列車間距離接近
-        //Debug("危険状態を検出しました。");
-        rail_info[bm].tx.cmd.code = RC2;
-        //Debug("後方区間");Debug(bm);Debug("に停止指令を発令しました。\n");
-        ret = true;
-      } else if(rail_info[i].rx.sts.on_rail==0){ //安全確認
-        //Debug("危険状態を回避しました。");
-        rail_info[bm].tx.cmd.code = RC1;
-        //Debug("後方区間");Debug(bm);Debug("に発車指令を発令しました。\n");
-        ret = true;
-      }//else Nothing to do
-    } else if(mode==OVERTAKE){           /*追越し用制御コード*/
-      if(rail_info[i].rx.sts.on_rail>1){  //列車間距離接近
-        if(rail_info[i].critical==0){
-          rail_info[i].critical = 1;      //危険状態フラグ
-          rail_info[i].tx.cmd.code = RC6; //通過後一時停止
-          Debug("***危険検出***");Debug("区間");Debug(i);Debug("に一時停止指令を発令しました。\n");
-          if(rail_info[fm].rx.sts.on_rail==0){
-            if(rail_info[fm].point_exist && point_info[rail_info[fm].point_num].work==0){ //前方副線に空きあり
-              rail_info[fm].critical = 1;
-              switch_point(rail_info[fm].point_num, PXC2);                                //列車検出後、ポイント切替
-              Debug("ポイント");Debug(fm);Debug("で追越しを行います。\n");
-            }//else Nothing to do
-          }//else Nothing to do
+      if(mode==NORMAL){                     /*列車2台用制御コード*/
+        if(rail_info[i].rx.sts.on_rail>=1){ //列車間距離接近
+          //Debug("危険状態を検出しました。");
+          rail_info[bm].tx.cmd.code = RC2;
+          //Debug("後方区間");Debug(bm);Debug("に停止指令を発令しました。\n");
+          ret = true;
+        } else if(rail_info[i].rx.sts.on_rail==0){ //安全確認
+          //Debug("危険状態を回避しました。");
+          rail_info[bm].tx.cmd.code = RC1;
+          //Debug("後方区間");Debug(bm);Debug("に発車指令を発令しました。\n");
           ret = true;
         }//else Nothing to do
-      } else {                            //列車安全運航
-        if(rail_info[i].critical==1){
-          if(rail_info[i].point_exist){   //ポイントがある場合
-            check_point();                //ポイント情報取得
-            if(point_info[rail_info[i].point_num].work && point_info[rail_info[i].point_num].passed){ //追越し確認後
-              switch_point(rail_info[i].point_num, PXC1);   //ポイント切替
-              rail_info[i].critical = 0;  //危険回避
-              Debug("追越しが完了しました。\n");
+      } else if(mode==OVERTAKE){           /*追越し用制御コード*/
+        if(rail_info[i].rx.sts.on_rail>1){  //列車間距離接近
+          if(rail_info[i].critical==0){
+            rail_info[i].critical = 1;      //危険状態フラグ
+            rail_info[i].tx.cmd.code = RC6; //通過後一時停止
+            Debug("***危険検出***");Debug("区間");Debug(i);Debug("に一時停止指令を発令しました。\n");
+            if(rail_info[fm].rx.sts.on_rail==0){
+              if(rail_info[fm].point_exist && point_info[rail_info[fm].point_num].work==0){ //前方副線に空きあり
+                rail_info[fm].critical = 1;
+                switch_point(rail_info[fm].point_num, PXC2);                                //列車検出後、ポイント切替
+                Debug("ポイント");Debug(fm);Debug("で追越しを行います。\n");
+              }//else Nothing to do
             }//else Nothing to do
-          } else {                        //ポイントがない場合
-            rail_info[i].critical==0;     //危険回避
-            rail_info[i].tx.cmd.code = RC1;
+            ret = true;
           }//else Nothing to do
-        } else {
-          rail_info[i].tx.cmd.code = RC0; //通常運行
+        } else {                            //列車安全運航
+          if(rail_info[i].critical==1){
+            if(rail_info[i].point_exist){   //ポイントがある場合
+              check_point();                //ポイント情報取得
+              if(point_info[rail_info[i].point_num].work && point_info[rail_info[i].point_num].passed){ //追越し確認後
+                switch_point(rail_info[i].point_num, PXC1);   //ポイント切替
+                rail_info[i].critical = 0;  //危険回避
+                Debug("追越しが完了しました。\n");
+              }//else Nothing to do
+            } else {                        //ポイントがない場合
+              rail_info[i].critical==0;     //危険回避
+              rail_info[i].tx.cmd.code = RC1;
+            }//else Nothing to do
+          } else {
+            rail_info[i].tx.cmd.code = RC0; //通常運行
+          }
         }
-      }
-    ret = true;   //常時送信
-    }//else Nothing to do
+        ret = true;   //常時送信
+      } else if(mode==OVERTAKE_1){          /*列車2台用制御コード*/
+        if(rail_info[i].rx.sts.on_rail>=1){ //列車間距離接近
+          //Debug("危険状態を検出しました。");
+          if(rail_info[fm].point_exist && point_info[rail_info[fm].point_num].work==0){ //前方副線に空きあり
+            switch_point(rail_info[fm].point_num, PXC2);                                //列車検出後、ポイント切替
+            Debug("ポイント");Debug(fm);Debug("で追越しを行います。\n");
+          }//else Nothing to do
+          rail_info[i].tx.cmd.code = RC2;
+          //Debug("後方区間");Debug(bm);Debug("に停止指令を発令しました。\n");
+          ret = true;
+        } else { //安全確認
+          //Debug("危険状態を回避しました。");
+          check_point();                //ポイント情報取得
+          if(point_info[rail_info[i].point_num].work && point_info[rail_info[i].point_num].passed){ //追越し確認後
+            switch_point(rail_info[i].point_num, PXC1);   //ポイント切替
+            Debug("追越しが完了しました。\n");
+          }//else Nothing to do
+          rail_info[bm].tx.cmd.code = RC1;  //通常運行
+          //Debug("後方区間");Debug(bm);Debug("に発車指令を発令しました。\n");
+          ret = true;
+        }
+      }//else Nothing to do
+    }
+  } else {
+    for(int i=M_NUM-1; i>=0; i--){
+      int fm = i-1;   //前方区間番号
+      int bm = i+1;   //後方区間番号
+      if(fm>=M_NUM)       fm = 0;
+      else if(fm<0)       fm = M_NUM-1;
+      //else Nothing to do
+      if(bm>=M_NUM)       bm = 0;
+      else if(bm<0)       bm = M_NUM-1;
+      if(mode==NORMAL){                     /*列車2台用制御コード*/
+        if(rail_info[i].rx.sts.on_rail>=1){ //列車間距離接近
+          //Debug("危険状態を検出しました。");
+          rail_info[bm].tx.cmd.code = RC2;
+          Debug("後方区間");Debug(bm);Debug("に停止指令を発令しました。\n");
+          ret = true;
+        } else if(rail_info[i].rx.sts.on_rail==0){ //安全確認
+          //Debug("危険状態を回避しました。");
+          rail_info[bm].tx.cmd.code = RC1;
+          Debug("後方区間");Debug(bm);Debug("に発車指令を発令しました。\n");
+          ret = true;
+        }//else Nothing to do
+      } else if(mode==OVERTAKE){           /*追越し用制御コード*/
+        if(rail_info[i].rx.sts.on_rail>1){  //列車間距離接近
+          if(rail_info[i].critical==0){
+            rail_info[i].critical = 1;      //危険状態フラグ
+            rail_info[i].tx.cmd.code = RC6; //通過後一時停止
+            Debug("***危険検出***");Debug("区間");Debug(i);Debug("に一時停止指令を発令しました。\n");
+            if(rail_info[fm].rx.sts.on_rail==0){
+              if(rail_info[fm].point_exist && point_info[rail_info[fm].point_num].work==0){ //前方副線に空きあり
+                rail_info[fm].critical = 1;
+                switch_point(rail_info[fm].point_num, PXC2);                                //列車検出後、ポイント切替
+                Debug("ポイント");Debug(fm);Debug("で追越しを行います。\n");
+              }//else Nothing to do
+            }//else Nothing to do
+            ret = true;
+          }//else Nothing to do
+        } else {                            //列車安全運航
+          if(rail_info[i].critical==1){
+            if(rail_info[i].point_exist){   //ポイントがある場合
+              check_point();                //ポイント情報取得
+              if(point_info[rail_info[i].point_num].work && point_info[rail_info[i].point_num].passed){ //追越し確認後
+                switch_point(rail_info[i].point_num, PXC1);   //ポイント切替
+                rail_info[i].critical = 0;  //危険回避
+                Debug("追越しが完了しました。\n");
+              }//else Nothing to do
+            } else {                        //ポイントがない場合
+              rail_info[i].critical==0;     //危険回避
+              rail_info[i].tx.cmd.code = RC1;
+            }//else Nothing to do
+          } else {
+            rail_info[i].tx.cmd.code = RC0; //通常運行
+          }
+        }
+        ret = true;   //常時送信
+      } else if(mode==OVERTAKE_1){          /*列車2台用制御コード*/
+        if(rail_info[i].rx.sts.on_rail>=1){ //列車間距離接近
+          //Debug("危険状態を検出しました。");
+          if(rail_info[fm].point_exist && point_info[rail_info[fm].point_num].work==0){ //前方副線に空きあり
+            switch_point(rail_info[fm].point_num, PXC2);                                //列車検出後、ポイント切替
+            Debug("ポイント");Debug(fm);Debug("で追越しを行います。\n");
+          }//else Nothing to do
+          rail_info[i].tx.cmd.code = RC2;
+          //Debug("後方区間");Debug(bm);Debug("に停止指令を発令しました。\n");
+          ret = true;
+        } else { //安全確認
+          //Debug("危険状態を回避しました。");
+          check_point();                //ポイント情報取得
+          if(point_info[rail_info[i].point_num].work && point_info[rail_info[i].point_num].passed){ //追越し確認後
+            switch_point(rail_info[i].point_num, PXC1);   //ポイント切替
+            Debug("追越しが完了しました。\n");
+          }//else Nothing to do
+          rail_info[bm].tx.cmd.code = RC1;  //通常運行
+          //Debug("後方区間");Debug(bm);Debug("に発車指令を発令しました。\n");
+          ret = true;
+        }
+      }//else Nothing to do
+    }
   }
-  return ret;
+  return true;
 }
 
 /**
@@ -214,10 +314,10 @@ bool analyze(void){
 */
 void check_dir(void){
   //進行方向確認
-  if(digitalRead(CW_SENS)==HIGH && digitalRead(CCW_SENS)==LOW && dir==CCW){
+  if(digitalRead(CW_SENS)==HIGH && digitalRead(CCW_SENS)==LOW){
     dir = CW;
     Debug("進行方向切替：時計回り\n");
-  } else if(digitalRead(CW_SENS)==LOW && digitalRead(CCW_SENS)==HIGH && dir==CW){
+  } else if(digitalRead(CW_SENS)==LOW && digitalRead(CCW_SENS)==HIGH){
     dir = CCW;
     Debug("進行方向切替：反時計回り\n");
   } else if(digitalRead(CW_SENS)==LOW && digitalRead(CCW_SENS)==LOW){
@@ -444,13 +544,14 @@ void (*resetFunc)(void) = 0;  //アドレスを0にしてプログラムを最�
  * @から始まるコマンドを受け付ける。
  */
 void serialEvent(){
-  char buff[16] = {0};
+  uint8_t buff[16] = {0};
   int i = 0;
   delay(1);
   while(Serial.available()) buff[i++] = Serial.read();
   for(int j=0; j<i; j++){
-    if(buff[j]=='@'){
-      char c = buff[++j];
+    char c = (char)buff[j];
+    if(c=='@'){
+      c = (char)buff[++j];
       switch(c){
         case '0':         //緊急停止
           for(int k=0; k<M_NUM; k++) rail_info[k].tx.cmd.code = RC2;
@@ -496,7 +597,7 @@ void serialEvent(){
           int k=0;
           rail.data[k++] = 0xe;
           while(j<i) {
-            if(buff[++j]==',')  k++;
+            if((char)buff[++j]==',')  k++;
             else                rail.data[k] = rail.data[k]*10 + (buff[j]-0x30);
           }
           i2c_tx_mlt(addr, sizeof(rail.data), rail.data);  //シリアルデータをI2Cに送信する

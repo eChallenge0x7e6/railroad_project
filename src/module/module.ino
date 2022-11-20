@@ -349,10 +349,10 @@ void ReceiveEvent(int num){
   Debug("指令を受信しました。:");Debug(rx.data);Debug("\n");
   
   //進行方向の設定
-  if(rx.cmd.directry==0 && dir_rail==CCW){
+  if(rx.cmd.directry==0 && dir_rail!=CW){
     dir_rail = CW;
     Debug("時計回り進行\n");
-  } else if(rx.cmd.directry==1 && dir_rail==CW) {
+  } else if(rx.cmd.directry==1 && dir_rail!=CCW) {
     dir_rail = CCW;
     Debug("反時計回り進行\n");
   }//else Nothing to do
