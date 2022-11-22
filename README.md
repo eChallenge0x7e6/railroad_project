@@ -25,7 +25,7 @@
 初心者の方もベテランさんも大歓迎。自分で何かを作りたいという方はぜひお越しください。<br><br>
 <img width="100px" alt="InstagramのQRコード" src="image/eChallenge.Instagram.qr.png">
 <img width="100px" alt="InstagramのQRコード" src="image/eChallenge.facebook.qr.png">
-SNSで活動報告を上げています。　いいね もらえるとうれしいです。<br><br><br>
+SNSで活動報告を上げています。「いいね」 もらえるとうれしいです。<br><br><br>
 
 ***
 ***
