@@ -13,7 +13,7 @@
 #endif
 #define CW      (1)         //時計回り
 #define CCW     (-1)        //反時計回り
-#define ADDRESS (0x42)      //I2C用モジュールアドレス
+#define ADDRESS (0x40)      //I2C用モジュールアドレス
 #define RELAY   (8)         //リレー出力ピン番号
 #define ON      (HIGH)      //リレー用トランジスタのアクティブ極性
 #define OFF     (LOW)       //リレー用トランジスタのネガティブ極性
@@ -58,7 +58,7 @@ union{                      //I2C受信用データ変数
     uint8_t mlt_flg : 1;    //連続受信フラグ
     uint8_t reserved : 2;   //未使用
     uint8_t code : 4;       //指令コード
-    uint8_t directry : 1;   //進行方向 0:時計回り, 1:反時計回り
+    uint8_t direction : 1;   //進行方向 0:時計回り, 1:反時計回り
   }cmd;
 }rx;
 int ACT_THR = 100;
@@ -76,7 +76,7 @@ bool power = false;         //レール出力
  */
 void rail_on(void){
   power = ON;
-  //Debug("発車しました。");
+  //Debug("Started");
 }
 
 /**
@@ -84,11 +84,12 @@ void rail_on(void){
  */
 void rail_off(void){
   power = OFF;
-  //Debug("停車しました。");
+  //Debug("Stopped");
 }
 
 /**
  * メインCPUからの指令処理関数
+ * @param on_rail:区間内の列車台数
  */
 void cmd_process(int on_rail){
   static int reg_num = 0;
@@ -157,54 +158,14 @@ uint8_t senser_process(void){
   static bool detect_b = false;             //列車検出フラグB
   static unsigned long timestamp_a = 0;     //センサAの検出タイミング
   static unsigned long timestamp_b = 0;     //センサBの検出タイミング
-  static int on_rail_num = 0;               //区間内の列車数
+  static int detected_num = 0;               //区間内の列車数
   static bool mask_a = false;
   static bool mask_b = false;
   static unsigned long wdt = 0;
   int r_sens_a = analogRead(SENS_A);
   int r_sens_b = analogRead(SENS_B);
 
-  /*
-    static int old_sens_a = analogRead(SENS_A);
-    static int old_sens_b = analogRead(SENS_B);
-    int gap_a = analogRead(SENS_A)-old_sens_a;        //センサ読み取り
-    int gap_b = analogRead(SENS_B)-old_sens_b;        //センサ読み取り
-    old_sens_a += gap_a;
-    old_sens_b += gap_b;
-    Debug("ギャップ:");Debug(gap_a);
-    Debug(", レベル:");Debug(old_sens_a);Debug("\n");
-    //センサAの処理
-    if(gap_a>NEG_THR && detect_a){            //列車の通過
-      detect_a = false;                       //検出フラグA OFF
-      if(SENS_PERIOD < millis()-timestamp_a){ //列車の通過時間確認
-        on_rail_num += dir_rail;              //区間内の列車数の算出
-        mask_a = true;                        //不感フラグ ON
-        Debug("A通過時間:");Debug(millis()-timestamp_a);Debug("ミリ秒\n");
-      }//else Nothing to do
-    } else if(gap_a<ACT_THR && !detect_a){    //列車の検出
-      detect_a = true;                        //検出フラグA ON
-      timestamp_a = millis();                 //検出時間記録
-    } else if((detect_a|mask_a) && MASK_PERIOD < millis()-timestamp_a){  //タイムオーバー
-      detect_a = false;                       //検出フラグA OFF
-      mask_a = false;                         //不感フラグ OFF
-    }//else Nothing to do
-    //センサBの処理
-    if(gap_b>NEG_THR && detect_b){            //列車の通過
-      detect_b = false;                       //検出フラグB OFF
-      if(SENS_PERIOD < millis()-timestamp_b){ //列車の通過時間確認
-        on_rail_num -= dir_rail;              //区間内の列車数の算出
-        mask_b = true;                        //不感フラグ ON
-        Debug("B通過時間:");Debug(millis()-timestamp_b);Debug("ミリ秒\n");
-      }
-    } else if(gap_b<ACT_THR && !detect_b){    //列車の検出
-      detect_b = true;                        //検出フラグB ON
-      timestamp_b = millis();                 //検出時間記録
-    } else if((detect_b|mask_b) && MASK_PERIOD < millis()-timestamp_b){  //タイムオーバー
-      detect_b = false;                       //検出フラグB OFF
-      mask_b = false;                         //不感フラグ OFF
-    }//else Nothing to do
-  */
-  
+  //センサAの処理
   if(mask_a){                               //不感処理
     if(millis()-timestamp_a > MASK_PERIOD) mask_a = false;  //解除
     //else Nothing to do
@@ -215,11 +176,11 @@ uint8_t senser_process(void){
   } else if(detect_a && r_sens_a>NEG_THR){  //列車の通過
     detect_a = false;                       //検出フラグA OFF
     long pass_time = millis()-timestamp_a;
-    if(pass_time > SENS_PERIOD && pass_time < MASK_PERIOD){            //列車の通過時間確認
-      on_rail_num += dir_rail;              //区間内の列車数の算出
+    if(pass_time > SENS_PERIOD && pass_time < MASK_PERIOD){ //列車の通過時間確認
+      detected_num += dir_rail;             //区間内の列車数の算出
       mask_a = true;
       Debug("A:");Debug(r_sens_a);Debug("\n");
-      Debug("A通過時間:");Debug(pass_time);Debug("ミリ秒\n");
+      Debug("A passed:");Debug(pass_time);Debug("msec\n");
     }//else Nothing to do
   }//else Nothing to do
 
@@ -235,10 +196,10 @@ uint8_t senser_process(void){
     detect_b = false;                       //検出フラグB OFF
     long pass_time = millis()-timestamp_b;
     if(pass_time > SENS_PERIOD && pass_time < MASK_PERIOD){            //列車の通過時間確認
-      on_rail_num -= dir_rail;              //区間内の列車数の算出
+      detected_num -= dir_rail;              //区間内の列車数の算出
       mask_b = true;
       Debug("B:");Debug(r_sens_b);Debug("\n");
-      Debug("B通過時間:");Debug(pass_time);Debug("ミリ秒\n");
+      Debug("B passed:");Debug(pass_time);Debug("msec\n");
     }//else Nothing to do
   }//else Nothing to do
   
@@ -248,20 +209,20 @@ uint8_t senser_process(void){
   }//else Nothing to do
 
   //センサエラーの確認
-  int chk_num = on_rail_num*dir_rail;
+  int chk_num = detected_num;
   if(chk_num>=0){
     tx.sts.on_rail = chk_num;               //送信用列車台数データ
     if(chk_num==0){
       wdt = millis();
     } else if(chk_num>3 || WDT_PERIOD<millis()-wdt){  //列車台数が異常または規定時間以上列車が居座る場合
-      on_rail_num-=dir_rail;                //1台減算
-      Debug("通過センサエラーを検出、修正しました。\n");
+      detected_num -= 1;                    //1台減算
+      Debug("Detect pass sensor error, but fixed\n");
     }//else Nothing to do
   } else {                                  //エラー処理
     tx.sts.on_rail = 0;
-    on_rail_num = 0;
+    detected_num = 0;
     chk_num = 0;
-    Debug("進入センサエラーを検出、修正しました。\n");
+    Debug("Detect enter sensor error, but fixed\n");
   }
   return chk_num;
 }
@@ -276,7 +237,7 @@ void (*resetFunc)(void) = 0;  //アドレスを0にしてプログラムを最�
  * 起動後、最初に一度だけ処理される。
  */
 void setup() {
-  Serial.begin(115200);           //デバッグ用シリアル出力設定
+  Serial.begin(115200);         //デバッグ用シリアル出力設定
   for(int i=0; i<sizeof(eeprom); i++) eeprom.data[i] = EEPROM.read(i);
   if(eeprom.prm.en==0x01){
     ACT_THR = eeprom.prm.act<<2;
@@ -285,7 +246,7 @@ void setup() {
     MASK_PERIOD = eeprom.prm.mask<<2;
     TMR_PERIOD  = eeprom.prm.det<<8;
     WDT_PERIOD  = eeprom.prm.wdt<<8;
-    Debug("EEPROMからパラメータを読み取ります。");
+    Debug("Read EEPROM\n");
   }//else Nothing to do
 
   //初期設定
@@ -306,7 +267,7 @@ void setup() {
  * 初期化関数の後、常に繰り返し動作する。
  */
 void loop() {
-  #ifdef DEBUG
+  #ifdef DISABLE
     static unsigned long time = millis();
     unsigned long period = millis()-time;
     if(period>10) {Debug(period);Debug("ms\n");}
@@ -314,14 +275,11 @@ void loop() {
     time = time + period;
   #endif
   
-  //区間状態の更新
-  int on_rail_num = senser_process();
+  int on_rail_num = senser_process(); //区間状態の更新
 
-  //指令処理
-  cmd_process(on_rail_num);
+  cmd_process(on_rail_num);           //指令処理
 
-  //レールに出力
-  digitalWrite(RELAY, power);
+  digitalWrite(RELAY, power);         //レールに出力
 }
 
 /**
@@ -346,15 +304,16 @@ void ReceiveEvent(int num){
     int i=0;
     while(Wire.available() > 0) data[i++] = Wire.read();
   }//else Nothing to do
-  Debug("指令を受信しました。:");Debug(rx.data);Debug("\n");
-  
+  Debug("MultiFlag:");Debug(rx.cmd.mlt_flg);Debug(",");
+  Debug("Code:");Debug(rx.cmd.code);Debug(",");
+  Debug("Direction:");Debug(rx.cmd.direction);Debug("\n");
   //進行方向の設定
-  if(rx.cmd.directry==0 && dir_rail!=CW){
+  if(rx.cmd.direction==0 && dir_rail!=CW){
     dir_rail = CW;
-    Debug("時計回り進行\n");
-  } else if(rx.cmd.directry==1 && dir_rail!=CCW) {
+    //Debug("Direction : CW\n");
+  } else if(rx.cmd.direction==1 && dir_rail!=CCW) {
     dir_rail = CCW;
-    Debug("反時計回り進行\n");
+    //Debug("Direction : CCW\n");
   }//else Nothing to do
 
   switch(rx.cmd.code){
@@ -380,12 +339,12 @@ void ReceiveEvent(int num){
     case 0x7:             //指令解除
       cmd_flg = false;
       mode = NORMAL;
-      Debug("指令が解除されました。\n");
+      Debug("Release the command\n");
       break;
     case 0xd:             //デバッグモード
       cmd_flg = false;
       mode = DEBUG_1;
-      Debug("デバッグモード\n");
+      Debug("Debug mode\n");
       break;
     case 0xe:
       eeprom.prm.en   = 0x01;
@@ -401,10 +360,10 @@ void ReceiveEvent(int num){
       MASK_PERIOD = data[3]<<2;
       TMR_PERIOD  = data[4]<<8;
       WDT_PERIOD  = data[5]<<8;
-      Debug("パラメータが設定されました。\n");
+      Debug("Set param\n");
       break;
     case 0xf:             //リセット
-      Debug("リセットされます。\n");
+      Debug("Reset\n");
       resetFunc();
       break;
     default:
